@@ -63,11 +63,77 @@ public class Rigid_Bunny : MonoBehaviour
 		return A;
 	}
 
+	float Signed_Distance_Function_Plane(Vector3 P, Vector3 N, Vector3 X)
+    {
+		return Vector3.Dot((X - P), N);
+    }
+
+    private Matrix4x4 Matrix_subtraction(Matrix4x4 a, Matrix4x4 b)
+    {
+        for (int i = 0; i < 4; ++i)
+        {
+            for (int j = 0; j < 4; ++j)
+            {
+                a[i, j] -= b[i, j];
+            }
+        }
+        return a;
+    }
+
 	// In this function, update v and w by the impulse due to the collision with
 	//a plane <P, N>
 	void Collision_Impulse(Vector3 P, Vector3 N)
 	{
+        Mesh mesh = GetComponent<MeshFilter>().mesh;
+        Vector3[] vertices = mesh.vertices;
 
+		Vector3 position = Vector3.zero;
+		int penetrate_count = 0;
+		Matrix4x4 R = Matrix4x4.Rotate(transform.rotation);
+		Matrix4x4 I = R * I_ref * R.transpose;
+
+		for (int i = 0; i < vertices.Length; i ++)
+        {
+			Vector3 R_ri = R.MultiplyPoint(vertices[i]);
+			Vector3 x_i = transform.position + R_ri;
+
+			float distance = Signed_Distance_Function_Plane(P, N, x_i);
+			if (distance >= 0f)
+				continue;
+
+            Vector3 v_i = v + Vector3.Cross(w, R_ri);
+			if (Vector3.Dot(v_i, N) >= 0f)
+				continue;
+
+			Vector3 v_i_n = Vector3.Dot(v_i, N) * N;
+			Vector3 v_i_t = v_i - v_i_n;
+
+			float u_t = restitution; // 切线方向的反弹系数
+			float u_n = restitution; // 法线方向的反弹系数
+
+			float dynamic_friction = 1 - u_t * (1 + u_n) * v_i_n.magnitude / v_i_t.magnitude;
+			float static_friction = 0;
+			float a = Mathf.Max(dynamic_friction, static_friction);
+
+			Vector3 v_i_n_new = -u_n * v_i_n;
+			Vector3 v_i_t_new = a * v_i_t;
+
+			Vector3 v_i_new = v_i_n_new + v_i_t_new;
+
+			Matrix4x4 m_r_r_i = Get_Cross_Matrix(R_ri);
+
+			float m_inverse = 1f / mass;
+			Vector3 mass_scale = new Vector3(m_inverse, m_inverse, m_inverse);
+			Matrix4x4 mass_scale_mat = Matrix4x4.Scale(mass_scale);
+
+			Matrix4x4 K = Matrix_subtraction(mass_scale_mat, m_r_r_i * I.inverse * m_r_r_i);
+
+			Vector3 j = K.inverse * (v_i_new - v_i);
+
+			v = v + m_inverse * j;
+			Vector3 dw = I.inverse * (Vector3.Cross(R_ri, j));
+			w = w + dw;
+		}
 	}
 
 	// Update is called once per frame
@@ -89,7 +155,7 @@ public class Rigid_Bunny : MonoBehaviour
 		if(launched)
         {
             // Part I: Update velocities
-            //v += gravity * dt;
+            v += gravity * dt;
             v *= linear_decay;
 
 			w *= angular_decay;
