@@ -14,9 +14,9 @@ public class Rigid_Bunny : MonoBehaviour
 	float linear_decay	= 0.999f;				// for velocity decay
 	float angular_decay	= 0.98f;				
 	float restitution 	= 0.5f;                 // for collision
+	float friction      = 0.5f;
 
-
-	Vector3 gravity = new Vector3(0.0f, -9.8f, 0.0f) * 0.1F;
+	Vector3 gravity = new Vector3(0.0f, -9.8f, 0.0f);
 
 	// Use this for initialization
 	void Start () 
@@ -68,18 +68,6 @@ public class Rigid_Bunny : MonoBehaviour
 		return Vector3.Dot((X - P), N);
     }
 
-    private Matrix4x4 Matrix_subtraction(Matrix4x4 a, Matrix4x4 b)
-    {
-        for (int i = 0; i < 4; ++i)
-        {
-            for (int j = 0; j < 4; ++j)
-            {
-                a[i, j] -= b[i, j];
-            }
-        }
-        return a;
-    }
-
 	// In this function, update v and w by the impulse due to the collision with
 	//a plane <P, N>
 	void Collision_Impulse(Vector3 P, Vector3 N)
@@ -87,9 +75,8 @@ public class Rigid_Bunny : MonoBehaviour
         Mesh mesh = GetComponent<MeshFilter>().mesh;
         Vector3[] vertices = mesh.vertices;
 
-		Vector3 position = Vector3.zero;
-		int penetrate_count = 0;
 		Matrix4x4 R = Matrix4x4.Rotate(transform.rotation);
+
 		Matrix4x4 I = R * I_ref * R.transpose;
 
 		for (int i = 0; i < vertices.Length; i ++)
@@ -109,10 +96,10 @@ public class Rigid_Bunny : MonoBehaviour
 			Vector3 v_i_t = v_i - v_i_n;
 
 			float u_t = restitution; // 切线方向的反弹系数
-			float u_n = restitution; // 法线方向的反弹系数
+			float u_n = friction; // 法线方向的反弹系数
 
-			float dynamic_friction = 1 - u_t * (1 + u_n) * v_i_n.magnitude / v_i_t.magnitude;
-			float static_friction = 0;
+			float dynamic_friction = 1f - u_t * (1f + u_n) * v_i_n.magnitude / v_i_t.magnitude;
+			float static_friction = 0.0f;
 			float a = Mathf.Max(dynamic_friction, static_friction);
 
 			Vector3 v_i_n_new = -u_n * v_i_n;
@@ -123,10 +110,11 @@ public class Rigid_Bunny : MonoBehaviour
 			Matrix4x4 m_r_r_i = Get_Cross_Matrix(R_ri);
 
 			float m_inverse = 1f / mass;
-			Vector3 mass_scale = new Vector3(m_inverse, m_inverse, m_inverse);
-			Matrix4x4 mass_scale_mat = Matrix4x4.Scale(mass_scale);
 
-			Matrix4x4 K = Matrix_subtraction(mass_scale_mat, m_r_r_i * I.inverse * m_r_r_i);
+			Matrix4x4 K = m_r_r_i * I.inverse * m_r_r_i;
+			K[0, 0] = m_inverse - K[0, 0];
+			K[1, 1] = m_inverse - K[1, 1];
+			K[2, 2] = m_inverse - K[2, 2];
 
 			Vector3 j = K.inverse * (v_i_new - v_i);
 
@@ -136,8 +124,75 @@ public class Rigid_Bunny : MonoBehaviour
 		}
 	}
 
-	// Update is called once per frame
-	void Update () 
+    void Collision_Impulse_A(Vector3 P, Vector3 N)
+    {
+        Mesh mesh = GetComponent<MeshFilter>().mesh;
+        Vector3[] vertices = mesh.vertices;
+
+        Vector3 position = Vector3.zero;
+
+        int penetrate_count = 0;
+        Matrix4x4 R = Matrix4x4.Rotate(transform.rotation);
+		for (int i = 0; i < vertices.Length; i++)
+		{
+			Vector3 R_ri = R.MultiplyPoint(vertices[i]);
+			Vector3 x_i = transform.position + R_ri;
+
+			float distance = Signed_Distance_Function_Plane(P, N, x_i);
+			if (distance >= 0f)
+				continue;
+
+			Vector3 v_i = v + Vector3.Cross(w, R_ri);
+			if (Vector3.Dot(v_i, N) >= 0f)
+				continue;
+
+			penetrate_count++;
+			position += vertices[i];
+		}
+
+		if (penetrate_count == 0)
+			return;
+
+		Matrix4x4 I = R * I_ref * R.transpose;
+
+		position /= (float)penetrate_count;
+
+		Vector3 R_ri_a = R.MultiplyPoint(position); // 当前位置
+		Vector3 v_a = v + Vector3.Cross(w, R_ri_a); // 当前速度
+
+		Vector3 v_a_n = Vector3.Dot(v_a, N) * N; // 法线方向的分量
+        Vector3 v_a_t = v_a - v_a_n;             // 切线方向分量
+
+        float u_t = friction; // 切线方向的反弹系数
+        float u_n = restitution; // 法线方向的反弹系数
+
+        float dynamic_friction = 1f - u_t * (1f + u_n) * v_a_n.magnitude / v_a_t.magnitude;
+        float static_friction = 0;
+        float a = Mathf.Max(dynamic_friction, static_friction);
+
+        Vector3 v_a_n_new = -u_n * v_a_n; // 将法线方向上的速度反向并乘以反弹系数，缩小它
+        Vector3 v_a_t_new = a * v_a_t;    // damp 切线方向上的速度
+
+        Vector3 v_a_new = v_a_n_new + v_a_t_new; // 合并速度
+
+        Matrix4x4 m_r_r_a = Get_Cross_Matrix(R_ri_a); 
+
+        float m_inverse = 1f / mass;
+		Matrix4x4 m = m_r_r_a * I.inverse * m_r_r_a;
+		m[0, 0] = m_inverse - m[0, 0];
+		m[1, 1] = m_inverse - m[1, 1];
+		m[2, 2] = m_inverse - m[2, 2];
+
+		Matrix4x4 K = m;
+		Vector3 j = K.inverse.MultiplyVector(v_a_new - v_a); // 利用公式推导出冲量j
+
+        v = v + m_inverse * j;
+        Vector3 dw = I.inverse.MultiplyVector(Vector3.Cross(R_ri_a, j));
+        w = w + dw;
+    }
+
+    // Update is called once per frame
+    void Update () 
 	{
 		//Game Control
 		if(Input.GetKey("r"))
@@ -155,20 +210,20 @@ public class Rigid_Bunny : MonoBehaviour
 		if(launched)
         {
             // Part I: Update velocities
-            v += gravity * dt;
-            v *= linear_decay;
+            v += gravity * dt; // 重力
+            v *= linear_decay; // drag force
 
 			w *= angular_decay;
 
 			// Part II: Collision Impulse
-			Collision_Impulse(new Vector3(0, 0.01f, 0), new Vector3(0, 1, 0));
-            Collision_Impulse(new Vector3(2, 0, 0), new Vector3(-1, 0, 0));
+			Collision_Impulse_A(new Vector3(0, 0.01f, 0), new Vector3(0, 1, 0));
+			Collision_Impulse_A(new Vector3(2, 0, 0), new Vector3(-1, 0, 0));
 
             // Part III: Update position & orientation
             //Update linear status
             Vector3 x = transform.position;
 
-            x += v * dt;
+            x = x + v * dt;
 
             //Update angular status
             Quaternion q = transform.rotation;
